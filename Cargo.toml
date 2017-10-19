@@ -1,0 +1,9 @@
+[package]
+name = "http_port"
+version = "0.1.0"
+authors = ["grotsev <denis.grotsev@gmail.com>"]
+
+[dependencies]
+tokio-postgres = "0.3"
+tokio-core = "0.1"
+futures = "0.1.7"
