@@ -15,21 +15,15 @@ fn main() {
         TlsMode::None,
         &handle,
     ).then(|c| c.unwrap().batch_execute("LISTEN test_notifications"))
-        .and_then(|c1| {
-            Connection::connect(
-                "postgres://postgres:111@172.17.0.2:5432",
-                TlsMode::None,
-                &handle,
-            ).then(|c2| {
-                c2.unwrap()
-                    .batch_execute("NOTIFY test_notifications, 'foo'")
-                    .map(|_| c1)
-            })
-        })
         .and_then(|c| {
-            c.notifications().into_future().map_err(
-                |(e, n)| (e, n.into_inner()),
-            )
+            c.notifications()
+                .and_then(|n| {
+                    let serve_one = futures::future::ok(println!("{:?}", n.channel));
+                    handle.spawn(serve_one);
+                    futures::future::ok(n)
+                })
+                .into_future()
+                .map_err(|(e, n)| (e, n.into_inner().into_inner()))
         })
         .map(|(n, _)| {
             let n = n.unwrap();
