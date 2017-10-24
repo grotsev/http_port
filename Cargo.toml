@@ -7,3 +7,4 @@ authors = ["grotsev <denis.grotsev@gmail.com>"]
 tokio-postgres = "0.3"
 tokio-core = "0.1"
 futures = "0.1.7"
+async-http-client = "0.2"
