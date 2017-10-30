@@ -13,6 +13,7 @@ use tokio_postgres::{Connection, TlsMode};
 use tokio_core::reactor::Core;
 use futures::{Future, Stream};
 use hyper::Client;
+use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
 enum Method {
@@ -30,7 +31,7 @@ struct Request {
 #[derive(Debug, Serialize)]
 struct Response {
     status: u16,
-    body: String,
+    body: Value,
 }
 
 fn main() {
@@ -53,13 +54,14 @@ fn main() {
                     .and_then(|res| {
                         let mut response = Response {
                             status: res.status().into(),
-                            body: String::new(),
+                            body: Value::Null,
                         };
                         println!("Response: {}", res.status());
 
                         res.body().concat2().and_then(move |body| {
-                            response.body = String::from_utf8(body.to_vec()).unwrap();
-                            println!("Response: {:?}", response);
+                            response.body = serde_json::from_slice(&body).unwrap();
+                            let s = serde_json::to_string(&response).unwrap();
+                            println!("Response: {}", s);
                             Ok(())
                         })
                     })
