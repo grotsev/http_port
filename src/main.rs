@@ -2,12 +2,30 @@ extern crate tokio_postgres;
 extern crate tokio_core;
 extern crate futures;
 extern crate hyper;
+extern crate serde;
+extern crate serde_json;
+
+#[macro_use]
+extern crate serde_derive;
 
 use std::io::{self, Write};
 use tokio_postgres::{Connection, TlsMode};
 use tokio_core::reactor::Core;
 use futures::{Future, Stream};
 use hyper::Client;
+
+#[derive(Debug, Deserialize)]
+enum Method {
+    GET,
+    POST,
+}
+
+#[derive(Deserialize)]
+struct Request {
+    method: Method,
+    url: String,
+    callback: String,
+}
 
 fn main() {
     let mut l = Core::new().unwrap();
@@ -22,9 +40,10 @@ fn main() {
         .map_err(|(e, _)| e)
         .and_then(|c| {
             c.notifications().for_each(|n| {
-                let uri = "http://httpbin.org/ip".parse().unwrap();
+                let request: Request = serde_json::from_str(&n.payload).unwrap();
+                let url = request.url.parse().unwrap();
                 let serve_one = client
-                    .get(uri)
+                    .get(url)
                     .and_then(|res| {
                         println!("Response: {}", res.status());
 
@@ -43,8 +62,4 @@ fn main() {
         });
 
     l.run(done).unwrap();
-}
-
-fn other(desc: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, desc)
 }
