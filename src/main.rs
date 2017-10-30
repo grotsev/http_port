@@ -27,6 +27,12 @@ struct Request {
     callback: String,
 }
 
+#[derive(Debug, Serialize)]
+struct Response {
+    status: u16,
+    body: String,
+}
+
 fn main() {
     let mut l = Core::new().unwrap();
     let handle = l.handle();
@@ -45,12 +51,16 @@ fn main() {
                 let serve_one = client
                     .get(url)
                     .and_then(|res| {
+                        let mut response = Response {
+                            status: res.status().into(),
+                            body: String::new(),
+                        };
                         println!("Response: {}", res.status());
 
-                        res.body().for_each(|chunk| {
-                            io::stdout().write_all(&chunk).map(|_| ()).map_err(
-                                From::from,
-                            )
+                        res.body().concat2().and_then(move |body| {
+                            response.body = String::from_utf8(body.to_vec()).unwrap();
+                            println!("Response: {:?}", response);
+                            Ok(())
                         })
                     })
                     .map_err(|e| {
