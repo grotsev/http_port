@@ -1,18 +1,18 @@
 extern crate tokio_postgres;
 extern crate tokio_core;
 extern crate futures;
-extern crate async_http_client;
+extern crate hyper;
 
-use std::io;
+use std::io::{self, Write};
 use tokio_postgres::{Connection, TlsMode};
 use tokio_core::reactor::Core;
 use futures::{Future, Stream};
-use async_http_client::prelude::*;
-use async_http_client::{HttpRequest, HttpCodec};
+use hyper::Client;
 
 fn main() {
     let mut l = Core::new().unwrap();
     let handle = l.handle();
+    let client = Client::new(&handle);
 
     let done = Connection::connect(
         "postgres://postgres:111@172.17.0.2:5432",
@@ -22,15 +22,20 @@ fn main() {
         .map_err(|(e, _)| e)
         .and_then(|c| {
             c.notifications().for_each(|n| {
-                let req = HttpRequest::get("http://example.com").unwrap();
-                let serve_one = TcpStream::connect(&(req.addr().unwrap()), &handle)
-                    .and_then(|connection| {
-                        let framed = connection.framed(HttpCodec::new());
-                        req.send(framed)
+                let uri = "http://httpbin.org/ip".parse().unwrap();
+                let serve_one = client
+                    .get(uri)
+                    .and_then(|res| {
+                        println!("Response: {}", res.status());
+
+                        res.body().for_each(|chunk| {
+                            io::stdout().write_all(&chunk).map(|_| ()).map_err(
+                                From::from,
+                            )
+                        })
                     })
-                    .then(|r| match r {
-                        Ok((resp, _fram)) => futures::future::ok(println!("{}", resp.unwrap())),
-                        Err(e) => futures::future::ok(println!("{}", e)),
+                    .map_err(|e| {
+                        println!("Response: {}", e);
                     });
                 handle.spawn(serve_one);
                 Ok(())
