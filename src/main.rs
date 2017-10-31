@@ -41,6 +41,12 @@ fn main() {
     let client = Client::new(&handle);
     let (tx, rx) = mpsc::channel(8);
 
+    let back = rx.for_each(|(callback, result)| {
+        println!("Response: {}\n{}", callback, result);
+        Ok(())
+    });
+    handle.spawn(back);
+
     let done = Connection::connect(
         "postgres://postgres:111@172.17.0.2:5432",
         TlsMode::None,
