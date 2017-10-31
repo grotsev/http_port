@@ -8,10 +8,11 @@ extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
 
-use std::io::{self, Write};
+use std::io;
+use futures::sync::mpsc;
 use tokio_postgres::{Connection, TlsMode};
 use tokio_core::reactor::Core;
-use futures::{Future, Stream};
+use futures::{Future, Stream, Sink};
 use hyper::Client;
 use serde_json::Value;
 
@@ -38,6 +39,7 @@ fn main() {
     let mut l = Core::new().unwrap();
     let handle = l.handle();
     let client = Client::new(&handle);
+    let (tx, rx) = mpsc::channel(8);
 
     let done = Connection::connect(
         "postgres://postgres:111@172.17.0.2:5432",
@@ -49,6 +51,7 @@ fn main() {
             c.notifications().for_each(|n| {
                 let request: Request = serde_json::from_str(&n.payload).unwrap();
                 let url = request.url.parse().unwrap();
+                let tx = tx.clone();
                 let serve_one = client
                     .get(url)
                     .and_then(|res| {
@@ -58,12 +61,18 @@ fn main() {
                         };
                         println!("Response: {}", res.status());
 
-                        res.body().concat2().and_then(move |body| {
-                            response.body = serde_json::from_slice(&body).unwrap();
-                            let s = serde_json::to_string(&response).unwrap();
-                            println!("Response: {}", s);
-                            Ok(())
-                        })
+                        res.body()
+                            .concat2()
+                            .and_then(move |body| {
+                                response.body = serde_json::from_slice(&body).unwrap();
+                                let s = serde_json::to_string(&response).unwrap();
+                                println!("Response: {}", s);
+                                tx.send((request.callback, s))
+                                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                                    .map_err(From::from)
+                                    .map(|_| ())
+                            })
+                            .map_err(From::from)
                     })
                     .map_err(|e| {
                         println!("Response: {}", e);
