@@ -1,6 +1,9 @@
 extern crate tokio_postgres;
 extern crate tokio_core;
 extern crate futures;
+extern crate futures_cpupool;
+extern crate r2d2;
+extern crate r2d2_postgres;
 extern crate hyper;
 extern crate serde;
 extern crate serde_json;
@@ -9,12 +12,14 @@ extern crate serde_json;
 extern crate serde_derive;
 
 use std::io;
-use futures::sync::mpsc;
-use tokio_postgres::{Connection, TlsMode};
+use tokio_postgres::Connection;
 use tokio_core::reactor::Core;
-use futures::{Future, Stream, Sink};
+use futures::{Future, Stream};
 use hyper::Client;
 use serde_json::Value;
+use futures_cpupool::CpuPool;
+use r2d2_postgres::PostgresConnectionManager;
+
 
 #[derive(Debug, Deserialize)]
 enum Method {
@@ -39,25 +44,23 @@ fn main() {
     let mut l = Core::new().unwrap();
     let handle = l.handle();
     let client = Client::new(&handle);
-    let (tx, rx) = mpsc::channel(8);
+    let thread_pool = CpuPool::new(10);
 
-    let back = rx.for_each(|(callback, result)| {
-        println!("Response: {}\n{}", callback, result);
-        Ok(())
-    });
-    handle.spawn(back);
+    let db_url = "postgres://postgres:111@172.17.0.2:5432";
+    let db_config = r2d2::Config::default();
+    let db_manager = PostgresConnectionManager::new(db_url, r2d2_postgres::TlsMode::None).unwrap();
+    let db_pool = r2d2::Pool::new(db_config, db_manager).unwrap();
 
-    let done = Connection::connect(
-        "postgres://postgres:111@172.17.0.2:5432",
-        TlsMode::None,
-        &handle,
-    ).then(|c| c.unwrap().batch_execute("LISTEN test_notifications"))
+    let done = Connection::connect(db_url, tokio_postgres::TlsMode::None, &handle)
+        .then(|c| c.unwrap().batch_execute("LISTEN test_notifications"))
         .map_err(|(e, _)| e)
         .and_then(|c| {
             c.notifications().for_each(|n| {
                 let request: Request = serde_json::from_str(&n.payload).unwrap();
                 let url = request.url.parse().unwrap();
-                let tx = tx.clone();
+                let thread_pool = thread_pool.clone();
+                let db = db_pool.clone();
+
                 let serve_one = client
                     .get(url)
                     .and_then(|res| {
@@ -73,10 +76,20 @@ fn main() {
                                 response.body = serde_json::from_slice(&body).unwrap();
                                 let s = serde_json::to_string(&response).unwrap();
                                 println!("Response: {}", s);
+                                thread_pool.spawn_fn(move || {
+                                    let conn = db.get().map_err(|e| {
+                                        io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e))
+                                    }).unwrap();
+
+                                    conn.execute(&request.callback, &[&s]).unwrap();
+                                    Ok(())
+                                })
+                                /*
                                 tx.send((request.callback, s))
                                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
                                     .map_err(From::from)
                                     .map(|_| ())
+                                */
                             })
                             .map_err(From::from)
                     })
