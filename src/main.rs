@@ -96,44 +96,49 @@ fn real_main() -> io::Result<()> {
             .map_err(|(e, _)| e)
         )
         .and_then(|c| {
-            c.notifications().for_each(|n| {
-                let request: Request = serde_json::from_str(&n.payload).unwrap();
-                let url = request.url.parse().unwrap();
-                let thread_pool = thread_pool.clone();
-                let db = db_pool.clone();
+            c.notifications()
+                .map_err(|e| {
+                    let re:io::Error = From::from(e); re
+                })
+                .for_each(|n| {
+                    let request: Request = serde_json::from_str(&n.payload)?;
+                    let url = request.url.parse()
+                        .map_err(|e:hyper::error::UriError| io::Error::new(io::ErrorKind::Other, e.description()))?;
+                    let thread_pool = thread_pool.clone();
+                    let db = db_pool.clone();
 
-                let serve_one = client
-                    .get(url)
-                    .and_then(|res| {
-                        let mut response = Response {
-                            status: res.status().into(),
-                            body: Value::Null,
-                        };
-                        println!("Response: {}", res.status());
+                    let serve_one = client
+                        .get(url)
+                        .and_then(|res| {
+                            let mut response = Response {
+                                status: res.status().into(),
+                                body: Value::Null,
+                            };
+                            println!("Response: {}", res.status());
 
-                        res.body()
-                            .concat2()
-                            .and_then(move |body| {
-                                response.body = serde_json::from_slice(&body).unwrap();
-                                let s = serde_json::to_string(&response).unwrap();
-                                println!("Response: {}", s);
-                                thread_pool.spawn_fn(move || {
-                                    let conn = db.get().map_err(|e| {
-                                        io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e))
-                                    }).unwrap();
+                            res.body()
+                                .concat2()
+                                .and_then(move |body| {
+                                    response.body = serde_json::from_slice(&body).unwrap();
+                                    let s = serde_json::to_string(&response).unwrap();
+                                    println!("Response: {}", s);
+                                    thread_pool.spawn_fn(move || {
+                                        let conn = db.get().map_err(|e| {
+                                            io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e))
+                                        }).unwrap();
 
-                                    conn.execute(&request.callback, &[&s]).unwrap();
-                                    Ok(())
+                                        conn.execute(&request.callback, &[&s]).unwrap();
+                                        Ok(())
+                                    })
                                 })
-                            })
-                            .map_err(From::from)
-                    })
-                    .map_err(|e| {
-                        println!("Response: {}", e);
-                    });
-                handle.spawn(serve_one);
-                Ok(())
-            })
+                                .map_err(From::from) // TODO remove
+                        })
+                        .map_err(|e| {
+                            println!("Response: {}", e);
+                        });
+                    handle.spawn(serve_one);
+                    Ok(())
+                }).map_err(From::from)
         });
 
     l.run(done).map_err(From::from)
