@@ -84,12 +84,6 @@ fn main() {
                                     conn.execute(&request.callback, &[&s]).unwrap();
                                     Ok(())
                                 })
-                                /*
-                                tx.send((request.callback, s))
-                                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-                                    .map_err(From::from)
-                                    .map(|_| ())
-                                */
                             })
                             .map_err(From::from)
                     })
