@@ -30,7 +30,7 @@ static VERSION: &'static str = "0.0.1";
 #[derive(Debug, Deserialize)]
 struct Config {
     db_uri : String,
-    db_pool : u32,
+    db_pool : usize,
     db_channel : String
 }
 
@@ -73,15 +73,14 @@ fn process(config: Config) -> io::Result<()> {
     let mut l = Core::new().unwrap();
     let handle = l.handle();
     let client = Client::new(&handle);
-    let thread_pool = CpuPool::new(10);
+    let thread_pool = CpuPool::new(config.db_pool);
 
-    let db_url = "postgres://postgres:111@172.17.0.2:5432";
     let db_config = r2d2::Config::default();
-    let db_manager = PostgresConnectionManager::new(db_url, r2d2_postgres::TlsMode::None).unwrap();
+    let db_manager = PostgresConnectionManager::new(config.db_uri.clone(), r2d2_postgres::TlsMode::None).unwrap();
     let db_pool = r2d2::Pool::new(db_config, db_manager).unwrap();
 
-    let done = Connection::connect(db_url, tokio_postgres::TlsMode::None, &handle)
-        .then(|c| c.unwrap().batch_execute("LISTEN test_notifications"))
+    let done = Connection::connect(config.db_uri.clone(), tokio_postgres::TlsMode::None, &handle)
+        .then(|c| c.unwrap().batch_execute(&format!("listen {}", &config.db_channel)))
         .map_err(|(e, _)| e)
         .and_then(|c| {
             c.notifications().for_each(|n| {
