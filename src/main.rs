@@ -69,7 +69,18 @@ Example Config File:
 "##, version=VERSION);
 }
 
-fn process(config: Config) -> io::Result<()> {
+fn real_main() -> io::Result<()> {
+    let mut args = env::args();
+    let name = args.nth(1).ok_or_else(|| {
+        help();
+        io::Error::new(io::ErrorKind::Other, "Unexpected arguments length")
+    })?;
+    let mut f = File::open(&name)?;
+    let mut input = String::new();
+    let input = f.read_to_string(&mut input).map(|_| input)?;
+    let config: Config = toml::from_str(&input)
+        .map_err(|error| io::Error::new(io::ErrorKind::Other, error.description()) )?;
+
     let mut l = Core::new().unwrap();
     let handle = l.handle();
     let client = Client::new(&handle);
@@ -123,27 +134,12 @@ fn process(config: Config) -> io::Result<()> {
             })
         });
 
-    l.run(done).unwrap();
-    return Ok(());
-}
-
-fn real_main() -> io::Result<()> {
-    let mut args = env::args();
-    let name = args.nth(1).ok_or_else(|| {
-        help();
-        io::Error::new(io::ErrorKind::Other, "Unexpected arguments length")
-    })?;
-    let mut f = File::open(&name)?;
-    let mut input = String::new();
-    let input = f.read_to_string(&mut input).map(|_| input)?;
-    let config = toml::from_str(&input)
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error.description()) )?;
-    process(config)
+    l.run(done).map_err(From::from)
 }
 
 fn main() {
-    real_main().unwrap_or_else(|description| {
-        println!("{}", description);
+    real_main().unwrap_or_else(|error| {
+        println!("{}", error.description());
         std::process::exit(1)
     })
 }
