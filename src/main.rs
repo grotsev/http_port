@@ -7,11 +7,16 @@ extern crate r2d2_postgres;
 extern crate hyper;
 extern crate serde;
 extern crate serde_json;
-
+extern crate toml;
 #[macro_use]
 extern crate serde_derive;
 
+use std::fs::File;
+use std::env;
 use std::io;
+use std::io::prelude::*;
+use std::error::Error;
+
 use tokio_postgres::Connection;
 use tokio_core::reactor::Core;
 use futures::{Future, Stream};
@@ -20,6 +25,14 @@ use serde_json::Value;
 use futures_cpupool::CpuPool;
 use r2d2_postgres::PostgresConnectionManager;
 
+static VERSION: &'static str = "0.0.1";
+
+#[derive(Debug, Deserialize)]
+struct Config {
+    db_uri : String,
+    db_pool : u32,
+    db_channel : String
+}
 
 #[derive(Debug, Deserialize)]
 enum Method {
@@ -40,7 +53,23 @@ struct Response {
     body: Value,
 }
 
-fn main() {
+fn help() {
+    println!(r##"
+Usage: http_port FILENAME
+    http_port {version} / REST API request from Postgres
+
+Available options:
+  -h,--help                Show this help text
+  FILENAME                 Path to configuration file
+
+Example Config File:
+  db-uri = "postgres://user:pass@localhost:5432/dbname"
+  db-pool = 10
+  db-channel = http_port
+"##, version=VERSION);
+}
+
+fn process(config: Config) -> io::Result<()> {
     let mut l = Core::new().unwrap();
     let handle = l.handle();
     let client = Client::new(&handle);
@@ -96,4 +125,26 @@ fn main() {
         });
 
     l.run(done).unwrap();
+    return Ok(());
+}
+
+fn real_main() -> io::Result<()> {
+    let mut args = env::args();
+    let name = args.nth(1).ok_or_else(|| {
+        help();
+        io::Error::new(io::ErrorKind::Other, "Unexpected arguments length")
+    })?;
+    let mut f = File::open(&name)?;
+    let mut input = String::new();
+    let input = f.read_to_string(&mut input).map(|_| input)?;
+    let config = toml::from_str(&input)
+        .map_err(|error| io::Error::new(io::ErrorKind::Other, error.description()) )?;
+    process(config)
+}
+
+fn main() {
+    real_main().unwrap_or_else(|description| {
+        println!("{}", description);
+        std::process::exit(1)
+    })
 }
