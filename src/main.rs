@@ -81,14 +81,15 @@ fn real_main() -> io::Result<()> {
     let config: Config = toml::from_str(&input)
         .map_err(|error| io::Error::new(io::ErrorKind::Other, error.description()) )?;
 
-    let mut l = Core::new().unwrap();
+    let mut l = Core::new()?;
     let handle = l.handle();
     let client = Client::new(&handle);
     let thread_pool = CpuPool::new(config.db_pool);
 
     let db_config = r2d2::Config::default();
-    let db_manager = PostgresConnectionManager::new(config.db_uri.clone(), r2d2_postgres::TlsMode::None).unwrap();
-    let db_pool = r2d2::Pool::new(db_config, db_manager).unwrap();
+    let db_manager = PostgresConnectionManager::new(config.db_uri.clone(), r2d2_postgres::TlsMode::None)?;
+    let db_pool = r2d2::Pool::new(db_config, db_manager)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))?;
 
     let done = Connection::connect(config.db_uri.clone(), tokio_postgres::TlsMode::None, &handle)
         .then(|c| c.unwrap().batch_execute(&format!("listen {}", &config.db_channel)))
