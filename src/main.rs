@@ -92,8 +92,9 @@ fn real_main() -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))?;
 
     let done = Connection::connect(config.db_uri.clone(), tokio_postgres::TlsMode::None, &handle)
-        .then(|c| c.unwrap().batch_execute(&format!("listen {}", &config.db_channel)))
-        .map_err(|(e, _)| e)
+        .and_then(|c| c.batch_execute(&format!("listen {}", &config.db_channel))
+            .map_err(|(e, _)| e)
+        )
         .and_then(|c| {
             c.notifications().for_each(|n| {
                 let request: Request = serde_json::from_str(&n.payload).unwrap();
