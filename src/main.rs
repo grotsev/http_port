@@ -113,15 +113,17 @@ fn real_main() -> io::Result<()> {
 
                 let serve_one = client
                     .get(url)
-                    .and_then(|res| {
+                    .and_then(move |res| {
                         let status = res.status().into();
                         res.body()
                             .concat2()
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
                             .and_then(move |body| {
-                                let s = serde_json::from_slice(&body).and_then(|body|
+                                futures::done(serde_json::from_slice(&body).and_then(|body|
                                     serde_json::to_string(&Response {status, body})
-                                ).unwrap();
-                                println!("Response: {}", s);
+                                ))
+                                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
+                            }).and_then(move|s|
                                 thread_pool.spawn_fn(move || {
                                     let conn = db.get().map_err(|e| {
                                         io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e))
@@ -130,7 +132,7 @@ fn real_main() -> io::Result<()> {
                                     conn.execute(&request.callback, &[&s]).unwrap();
                                     Ok(())
                                 })
-                            })
+                            )
                             .map_err(From::from) // TODO remove
                     })
                     .map_err(|e| {
