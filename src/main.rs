@@ -29,15 +29,15 @@ static VERSION: &'static str = "0.0.1";
 
 #[derive(Debug, Deserialize)]
 struct Config {
-    db_uri : String,
-    db_pool : usize,
-    db_channel : String
+    db_uri: String,
+    db_pool: usize,
+    db_channel: String,
 }
 
 #[derive(Debug, Deserialize)]
 enum Method {
     GET,
-    POST {body: String},
+    POST { body: String },
 }
 
 #[derive(Deserialize)]
@@ -54,7 +54,8 @@ struct Response {
 }
 
 fn help() {
-    println!(r##"
+    println!(
+        r##"
 Usage: http_port FILENAME
     http_port {version} / REST API request from Postgres
 
@@ -66,17 +67,10 @@ Example Config File:
   db-uri = "postgres://user:pass@localhost:5432/dbname"
   db-pool = 10
   db-channel = http_port
-"##, version=VERSION);
+"##,
+        version = VERSION
+    );
 }
-/*
-fn proc_notification(n: tokio_postgres::Notification) -> Box<Future<Item = (), Error = tokio_postgres::Error>> {
-    unimplemented!();
-}
-*/
-/*
-fn name(n: Notification) -> Result<(request, hyper::Uri), io::Error> {
-    unimplemented!();
-}*/
 
 fn real_main() -> io::Result<()> {
     let mut args = env::args();
@@ -87,8 +81,9 @@ fn real_main() -> io::Result<()> {
     let mut f = File::open(&name)?;
     let mut input = String::new();
     let input = f.read_to_string(&mut input).map(|_| input)?;
-    let config: Config = toml::from_str(&input)
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error.description()) )?;
+    let config: Config = toml::from_str(&input).map_err(|error| {
+        io::Error::new(io::ErrorKind::Other, error.description())
+    })?;
 
     let mut l = Core::new()?;
     let handle = l.handle();
@@ -96,14 +91,20 @@ fn real_main() -> io::Result<()> {
     let thread_pool = CpuPool::new(config.db_pool);
 
     let db_config = r2d2::Config::default();
-    let db_manager = PostgresConnectionManager::new(config.db_uri.clone(), r2d2_postgres::TlsMode::None)?;
-    let db_pool = r2d2::Pool::new(db_config, db_manager)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))?;
+    let db_manager =
+        PostgresConnectionManager::new(config.db_uri.clone(), r2d2_postgres::TlsMode::None)?;
+    let db_pool = r2d2::Pool::new(db_config, db_manager).map_err(|e| {
+        io::Error::new(io::ErrorKind::Other, e.description())
+    })?;
 
-    let done = Connection::connect(config.db_uri.clone(), tokio_postgres::TlsMode::None, &handle)
-        .and_then(|c| c.batch_execute(&format!("listen {}", &config.db_channel))
+    let done = Connection::connect(
+        config.db_uri.clone(),
+        tokio_postgres::TlsMode::None,
+        &handle,
+    ).and_then(|c| {
+        c.batch_execute(&format!("listen {}", &config.db_channel))
             .map_err(|(e, _)| e)
-        )
+    })
         .and_then(|c| {
             c.notifications().for_each(|n| {
                 let request: Request = serde_json::from_str(&n.payload).unwrap();
@@ -111,35 +112,46 @@ fn real_main() -> io::Result<()> {
                 let thread_pool = thread_pool.clone();
                 let db = db_pool.clone();
 
-                let process_response =  |res: hyper::Response| {
+                let process_response = |res: hyper::Response| {
                     let status = res.status().into();
                     res.body()
                         .concat2()
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
                         .and_then(move |body| {
-                            futures::done(
-                                serde_json::from_slice(&body).and_then(|body|
-                                    serde_json::to_string(&Response {status, body})
-                                )
-                            ).map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
-                        }).and_then(move |s|
+                            futures::done(serde_json::from_slice(&body).and_then(|body| {
+                                serde_json::to_string(&Response { status, body })
+                            })).map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
+                        })
+                        .and_then(move |s| {
                             thread_pool.spawn_fn(move || {
                                 db.get()
-                                    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e)) )
-                                    .and_then(|conn|
-                                        conn.execute(&request.callback, &[&s])
-                                        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("execute: {}", e)) )
-                                    ).unwrap_or_else(|e| {println!("{}", e); 0} ); // callback error
+                                    .map_err(|e| {
+                                        io::Error::new(
+                                            io::ErrorKind::Other,
+                                            format!("timeout: {}", e),
+                                        )
+                                    })
+                                    .and_then(|conn| {
+                                        conn.execute(&request.callback, &[&s]).map_err(|e| {
+                                            io::Error::new(
+                                                io::ErrorKind::Other,
+                                                format!("execute: {}", e),
+                                            )
+                                        })
+                                    })
+                                    .unwrap_or_else(|e| {
+                                        println!("{}", e);
+                                        0
+                                    }); // callback error
                                 Ok(())
                             })
-                        )
+                        })
                         .map_err(From::from)
                 };
 
-                let serve_one = client
-                    .get(url)
-                    .and_then(process_response)
-                    .map_err(|e| println!("{}", e) ); // request error
+                let serve_one = client.get(url).and_then(process_response).map_err(|e| {
+                    println!("{}", e)
+                }); // request error
                 handle.spawn(serve_one);
                 Ok(())
             })
