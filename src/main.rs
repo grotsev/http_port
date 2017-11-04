@@ -111,32 +111,34 @@ fn real_main() -> io::Result<()> {
                 let thread_pool = thread_pool.clone();
                 let db = db_pool.clone();
 
+                let process_response =  |res: hyper::Response| {
+                    let status = res.status().into();
+                    res.body()
+                        .concat2()
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
+                        .and_then(move |body| {
+                            futures::done(
+                                serde_json::from_slice(&body).and_then(|body|
+                                    serde_json::to_string(&Response {status, body})
+                                )
+                            ).map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
+                        }).and_then(move |s|
+                            thread_pool.spawn_fn(move || {
+                                db.get()
+                                    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e)) )
+                                    .and_then(|conn|
+                                        conn.execute(&request.callback, &[&s])
+                                        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("execute: {}", e)) )
+                                    ).unwrap_or_else(|e| {println!("{}", e); 0} ); // callback error
+                                Ok(())
+                            })
+                        )
+                        .map_err(From::from)
+                };
+
                 let serve_one = client
                     .get(url)
-                    .and_then(move |res| {
-                        let status = res.status().into();
-                        res.body()
-                            .concat2()
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
-                            .and_then(move |body| {
-                                futures::done(
-                                    serde_json::from_slice(&body).and_then(|body|
-                                        serde_json::to_string(&Response {status, body})
-                                    )
-                                ).map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
-                            }).and_then(move|s|
-                                thread_pool.spawn_fn(move || {
-                                    db.get()
-                                        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e)) )
-                                        .and_then(|conn|
-                                            conn.execute(&request.callback, &[&s])
-                                            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("execute: {}", e)) )
-                                        ).unwrap_or_else(|e| {println!("{}", e); 0} ); // callback error
-                                    Ok(())
-                                })
-                            )
-                            .map_err(From::from)
-                    })
+                    .and_then(process_response)
                     .map_err(|e| println!("{}", e) ); // request error
                 handle.spawn(serve_one);
                 Ok(())
