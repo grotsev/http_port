@@ -126,24 +126,18 @@ fn real_main() -> io::Result<()> {
                                 ).map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
                             }).and_then(move|s|
                                 thread_pool.spawn_fn(move || {
-                                    /*let conn = db.get().map_err(|e| {
-                                        io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e))
-                                    }).unwrap();*/
-
                                     db.get()
                                         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e)) )
                                         .and_then(|conn|
                                             conn.execute(&request.callback, &[&s])
                                             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("execute: {}", e)) )
-                                        ).unwrap_or_else(|e| {println!("{}", e); 0} );
+                                        ).unwrap_or_else(|e| {println!("{}", e); 0} ); // callback error
                                     Ok(())
                                 })
                             )
-                            .map_err(From::from) // TODO remove
+                            .map_err(From::from)
                     })
-                    .map_err(|e| {
-                        println!("Response: {}", e);
-                    });
+                    .map_err(|e| println!("{}", e) ); // request error
                 handle.spawn(serve_one);
                 Ok(())
             })
@@ -153,8 +147,8 @@ fn real_main() -> io::Result<()> {
 }
 
 fn main() {
-    real_main().unwrap_or_else(|error| {
-        println!("{}", error.description());
+    real_main().unwrap_or_else(|e| {
+        println!("{}", e.description()); // startup error
         std::process::exit(1)
     })
 }
