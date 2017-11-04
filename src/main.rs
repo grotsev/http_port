@@ -114,17 +114,13 @@ fn real_main() -> io::Result<()> {
                 let serve_one = client
                     .get(url)
                     .and_then(|res| {
-                        let mut response = Response {
-                            status: res.status().into(),
-                            body: Value::Null,
-                        };
-                        println!("Response: {}", res.status());
-
+                        let status = res.status().into();
                         res.body()
                             .concat2()
                             .and_then(move |body| {
-                                response.body = serde_json::from_slice(&body).unwrap();
-                                let s = serde_json::to_string(&response).unwrap();
+                                let s = serde_json::from_slice(&body).and_then(|body|
+                                    serde_json::to_string(&Response {status, body})
+                                ).unwrap();
                                 println!("Response: {}", s);
                                 thread_pool.spawn_fn(move || {
                                     let conn = db.get().map_err(|e| {
