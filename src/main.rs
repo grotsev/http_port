@@ -119,17 +119,23 @@ fn real_main() -> io::Result<()> {
                             .concat2()
                             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
                             .and_then(move |body| {
-                                futures::done(serde_json::from_slice(&body).and_then(|body|
-                                    serde_json::to_string(&Response {status, body})
-                                ))
-                                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
+                                futures::done(
+                                    serde_json::from_slice(&body).and_then(|body|
+                                        serde_json::to_string(&Response {status, body})
+                                    )
+                                ).map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
                             }).and_then(move|s|
                                 thread_pool.spawn_fn(move || {
-                                    let conn = db.get().map_err(|e| {
+                                    /*let conn = db.get().map_err(|e| {
                                         io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e))
-                                    }).unwrap();
+                                    }).unwrap();*/
 
-                                    conn.execute(&request.callback, &[&s]).unwrap();
+                                    db.get()
+                                        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e)) )
+                                        .and_then(|conn|
+                                            conn.execute(&request.callback, &[&s])
+                                            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("execute: {}", e)) )
+                                        ).unwrap_or_else(|e| {println!("{}", e); 0} );
                                     Ok(())
                                 })
                             )
