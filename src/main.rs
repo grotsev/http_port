@@ -15,12 +15,12 @@ use std::fs::File;
 use std::env;
 use std::io;
 use std::io::prelude::*;
-use std::error::Error;
 
 use tokio_postgres::Connection;
 use tokio_core::reactor::Core;
 use futures::{Future, Stream};
 use hyper::Client;
+use hyper::header::{ContentLength, ContentType};
 use serde_json::Value;
 use futures_cpupool::CpuPool;
 use r2d2_postgres::PostgresConnectionManager;
@@ -37,7 +37,7 @@ struct Config {
 #[derive(Debug, Deserialize)]
 enum Method {
     GET,
-    POST { body: String },
+    POST { body: Value },
 }
 
 #[derive(Deserialize)]
@@ -83,6 +83,7 @@ fn proc_notification(
     let url = request.url.parse().map_err(|e| {
         io::Error::new(io::ErrorKind::Other, e)
     })?;
+    let callback = request.callback.to_owned();
 
     let process_response = |res: hyper::Response| {
         let status = res.status().into();
@@ -101,7 +102,7 @@ fn proc_notification(
                             io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e))
                         })
                         .and_then(|conn| {
-                            conn.execute(&request.callback, &[&s]).map_err(|e| {
+                            conn.execute(&callback, &[&s]).map_err(|e| {
                                 io::Error::new(io::ErrorKind::Other, format!("execute: {}", e))
                             })
                         })
@@ -115,9 +116,18 @@ fn proc_notification(
             .map_err(From::from)
     };
 
-    let serve_one = client.get(url).and_then(process_response).map_err(|e| {
-        println!("{}", e)
-    }); // request error
+    let serve_one = match request.method {
+        Method::GET => client.get(url),
+        Method::POST { body } => {
+            let json = serde_json::to_string(&body)?;
+            let mut req = hyper::Request::new(hyper::Method::Post, url);
+            req.headers_mut().set(ContentType::json());
+            req.headers_mut().set(ContentLength(json.len() as u64));
+            req.set_body(json);
+            client.request(req)
+        }
+    }.and_then(process_response)
+        .map_err(|e| println!("{}", e)); // request error
     handle.spawn(serve_one);
     Ok(())
 }
