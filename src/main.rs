@@ -72,6 +72,56 @@ Example Config File:
     );
 }
 
+fn proc_notification(
+    thread_pool: CpuPool,
+    db: r2d2::Pool<r2d2_postgres::PostgresConnectionManager>,
+    client: hyper::Client<hyper::client::HttpConnector>,
+    handle: tokio_core::reactor::Handle,
+    payload: &str,
+) -> io::Result<()> {
+    let request: Request = serde_json::from_str(payload)?;
+    let url = request.url.parse().map_err(|e| {
+        io::Error::new(io::ErrorKind::Other, e)
+    })?;
+
+    let process_response = |res: hyper::Response| {
+        let status = res.status().into();
+        res.body()
+            .concat2()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .and_then(move |body| {
+                futures::done(serde_json::from_slice(&body).and_then(|body| {
+                    serde_json::to_string(&Response { status, body })
+                })).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            })
+            .and_then(move |s| {
+                thread_pool.spawn_fn(move || {
+                    db.get()
+                        .map_err(|e| {
+                            io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e))
+                        })
+                        .and_then(|conn| {
+                            conn.execute(&request.callback, &[&s]).map_err(|e| {
+                                io::Error::new(io::ErrorKind::Other, format!("execute: {}", e))
+                            })
+                        })
+                        .unwrap_or_else(|e| {
+                            println!("{}", e);
+                            0
+                        }); // callback error
+                    Ok(())
+                })
+            })
+            .map_err(From::from)
+    };
+
+    let serve_one = client.get(url).and_then(process_response).map_err(|e| {
+        println!("{}", e)
+    }); // request error
+    handle.spawn(serve_one);
+    Ok(())
+}
+
 fn real_main() -> io::Result<()> {
     let mut args = env::args();
     let name = args.nth(1).ok_or_else(|| {
@@ -82,7 +132,7 @@ fn real_main() -> io::Result<()> {
     let mut input = String::new();
     let input = f.read_to_string(&mut input).map(|_| input)?;
     let config: Config = toml::from_str(&input).map_err(|error| {
-        io::Error::new(io::ErrorKind::Other, error.description())
+        io::Error::new(io::ErrorKind::Other, error)
     })?;
 
     let mut l = Core::new()?;
@@ -94,7 +144,7 @@ fn real_main() -> io::Result<()> {
     let db_manager =
         PostgresConnectionManager::new(config.db_uri.clone(), r2d2_postgres::TlsMode::None)?;
     let db_pool = r2d2::Pool::new(db_config, db_manager).map_err(|e| {
-        io::Error::new(io::ErrorKind::Other, e.description())
+        io::Error::new(io::ErrorKind::Other, e)
     })?;
 
     let done = Connection::connect(
@@ -107,53 +157,17 @@ fn real_main() -> io::Result<()> {
     })
         .and_then(|c| {
             c.notifications().for_each(|n| {
-                let request: Request = serde_json::from_str(&n.payload).unwrap();
-                let url = request.url.parse().unwrap();
-                let thread_pool = thread_pool.clone();
-                let db = db_pool.clone();
-
-                let process_response = |res: hyper::Response| {
-                    let status = res.status().into();
-                    res.body()
-                        .concat2()
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
-                        .and_then(move |body| {
-                            futures::done(serde_json::from_slice(&body).and_then(|body| {
-                                serde_json::to_string(&Response { status, body })
-                            })).map_err(|e| io::Error::new(io::ErrorKind::Other, e.description()))
-                        })
-                        .and_then(move |s| {
-                            thread_pool.spawn_fn(move || {
-                                db.get()
-                                    .map_err(|e| {
-                                        io::Error::new(
-                                            io::ErrorKind::Other,
-                                            format!("timeout: {}", e),
-                                        )
-                                    })
-                                    .and_then(|conn| {
-                                        conn.execute(&request.callback, &[&s]).map_err(|e| {
-                                            io::Error::new(
-                                                io::ErrorKind::Other,
-                                                format!("execute: {}", e),
-                                            )
-                                        })
-                                    })
-                                    .unwrap_or_else(|e| {
-                                        println!("{}", e);
-                                        0
-                                    }); // callback error
-                                Ok(())
-                            })
-                        })
-                        .map_err(From::from)
-                };
-
-                let serve_one = client.get(url).and_then(process_response).map_err(|e| {
-                    println!("{}", e)
-                }); // request error
-                handle.spawn(serve_one);
-                Ok(())
+                Ok(
+                    proc_notification(
+                        thread_pool.clone(),
+                        db_pool.clone(),
+                        client.clone(),
+                        handle.clone(),
+                        &n.payload,
+                    ).unwrap_or_else(|e| {
+                        println!("{}", e); // request error
+                    }),
+                )
             })
         });
 
@@ -162,7 +176,7 @@ fn real_main() -> io::Result<()> {
 
 fn main() {
     real_main().unwrap_or_else(|e| {
-        println!("{}", e.description()); // startup error
+        println!("{}", e); // startup error
         std::process::exit(1)
     })
 }
