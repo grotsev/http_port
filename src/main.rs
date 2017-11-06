@@ -85,9 +85,9 @@ fn proc_notification(
     })?;
     let callback = request.callback.to_owned();
 
-    let process_response = |res: hyper::Response| {
-        let status = res.status().into();
-        res.body()
+    let process_response = |response: hyper::Response| {
+        let status = response.status().into();
+        response.body()
             .concat2()
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
             .and_then(move |body| {
@@ -95,27 +95,28 @@ fn proc_notification(
                     serde_json::to_string(&Response { status, body })
                 })).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
             })
-            .and_then(move |s| {
+            .and_then(move |response| {
                 thread_pool.spawn_fn(move || {
                     db.get()
                         .map_err(|e| {
-                            io::Error::new(io::ErrorKind::Other, format!("timeout: {}", e))
+                            io::Error::new(io::ErrorKind::Other, format!("Timeout error: {}", e))
                         })
                         .and_then(|conn| {
-                            conn.execute(&callback, &[&s]).map_err(|e| {
-                                io::Error::new(io::ErrorKind::Other, format!("execute: {}", e))
+                            conn.execute(&callback, &[&response]).map_err(|e| {
+                                io::Error::new(io::ErrorKind::Other, format!("Callback error: {}", e))
                             })
                         })
                         .unwrap_or_else(|e| {
-                            println!("{}", e);
+                            println!("Request error: {}: {}", e, callback);
                             0
-                        }); // callback error
+                        });
                     Ok(())
                 })
             })
             .map_err(From::from)
     };
 
+    let callback = request.callback.to_owned();
     let serve_one = match request.method {
         Method::GET => client.get(url),
         Method::POST { body } => {
@@ -127,7 +128,7 @@ fn proc_notification(
             client.request(req)
         }
     }.and_then(process_response)
-        .map_err(|e| println!("{}", e)); // request error
+        .map_err(move |e| println!("Response error: {}: {}", e, callback));
     handle.spawn(serve_one);
     Ok(())
 }
@@ -175,7 +176,7 @@ fn real_main() -> io::Result<()> {
                         handle.clone(),
                         &n.payload,
                     ).unwrap_or_else(|e| {
-                        println!("{}", e); // request error
+                        println!("Request error: {}: {}", e, n.payload);
                     }),
                 )
             })
@@ -186,7 +187,7 @@ fn real_main() -> io::Result<()> {
 
 fn main() {
     real_main().unwrap_or_else(|e| {
-        println!("{}", e); // startup error
+        println!("Startup error: {}", e);
         std::process::exit(1)
     })
 }
